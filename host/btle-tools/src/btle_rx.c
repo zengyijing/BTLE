@@ -111,9 +111,18 @@ const int PCAP_HDR_TCPDUMP_LEN = 24;
 char* filename_pcap = NULL;
 FILE *fh_pcap_store;
 
+char* filename_iq = NULL;
+FILE *fh_iq_store;
+
+char* read_filename = NULL;
+
 void init_pcap_file() {
     fh_pcap_store = fopen(filename_pcap, "wb");
     fwrite(PCAP_HDR_TCPDUMP, 1, PCAP_HDR_TCPDUMP_LEN, fh_pcap_store);
+}
+
+void init_iq_file() {
+    fh_iq_store = fopen(filename_iq, "wb");
 }
 
 typedef struct {
@@ -152,7 +161,7 @@ void write_dummy_entry(){
 //----------------------------------some sys stuff----------------------------------
 
 //----------------------------------some basic signal definition----------------------------------
-#define SAMPLE_PER_SYMBOL 4 // 4M sampling rate
+#define SAMPLE_PER_SYMBOL 2 // 2M sampling rate
 
 volatile int rx_buf_offset; // remember to initialize it!
 
@@ -464,12 +473,42 @@ char *board_name = "HACKRF";
 #define MAX_GAIN 62
 #define DEFAULT_GAIN 6
 
+void save_phy_sample(IQ_TYPE *IQ_sample, int num_IQ_sample, FILE *fp)
+{
+  int i;
+  /*
+  FILE *fp = fopen(filename, "w");
+  if (fp == NULL) {
+    printf("save_phy_sample: fopen failed!\n");
+    return;
+  }
+  */
+  for(i=0; i<num_IQ_sample; i++) {
+    if (i%64 == 0) {
+      fprintf(fp, "\n");
+    }
+    fprintf(fp, "%d, ", IQ_sample[i]);
+  }
+  //fprintf(fp, "\n");
+
+  //fclose(fp);
+}
+
+void save_iq_sample(IQ_TYPE *IQ_sample, int num_IQ_sample, FILE *fptr)
+{
+  fwrite(IQ_sample, sizeof(IQ_TYPE), num_IQ_sample, fptr);
+}
+
+
 int rx_callback(hackrf_transfer* transfer) {
   int i;
   int8_t *p = (int8_t *)transfer->buffer;
   for( i=0; i<transfer->valid_length; i++) {
     rx_buf[rx_buf_offset] = p[i];
     rx_buf_offset = (rx_buf_offset+1)&( LEN_BUF-1 ); //cyclic buffer
+  }
+  if(filename_iq != NULL) {
+    save_iq_sample(p, transfer->valid_length, fh_iq_store);
   }
   //printf("%d\n", transfer->valid_length); // !!!!it is 262144 always!!!! Now it is 4096. Defined in hackrf.c lib_device->buffer_size
   return(0);
@@ -819,26 +858,7 @@ void disp_hex_in_bit(uint8_t *hex, int num_hex)
   printf("\n");
 }
 
-void save_phy_sample(IQ_TYPE *IQ_sample, int num_IQ_sample, char *filename)
-{
-  int i;
 
-  FILE *fp = fopen(filename, "w");
-  if (fp == NULL) {
-    printf("save_phy_sample: fopen failed!\n");
-    return;
-  }
-
-  for(i=0; i<num_IQ_sample; i++) {
-    if (i%64 == 0) {
-      fprintf(fp, "\n");
-    }
-    fprintf(fp, "%d, ", IQ_sample[i]);
-  }
-  fprintf(fp, "\n");
-
-  fclose(fp);
-}
 
 void load_phy_sample(IQ_TYPE *IQ_sample, int num_IQ_sample, char *filename)
 {
@@ -851,7 +871,7 @@ void load_phy_sample(IQ_TYPE *IQ_sample, int num_IQ_sample, char *filename)
   }
 
   i = 0;
-  while( ~feof(fp) ) {
+  while(!feof(fp) ) {
     if ( fscanf(fp, "%d,", &tmp_val) ) {
       IQ_sample[i] = tmp_val;
       i++;
@@ -863,9 +883,22 @@ void load_phy_sample(IQ_TYPE *IQ_sample, int num_IQ_sample, char *filename)
     }
     //printf("%d\n", i);
   }
-  printf("%d I/Q are read.\n", i);
+  printf("%d I/Q samples are read.\n", i);
 
   fclose(fp);
+}
+
+void load_iq_sample(IQ_TYPE *IQ_sample, int num_IQ_sample, char *filename)
+{
+  FILE *fp = fopen(filename, "rb");
+  if (fp == NULL) {
+    printf("load_iq_sample: fopen failed!\n");
+    return;
+  }
+  fread(IQ_sample, sizeof(IQ_TYPE), num_IQ_sample, fp);
+
+  fclose(fp);
+
 }
 
 void save_phy_sample_for_matlab(IQ_TYPE *IQ_sample, int num_IQ_sample, char *filename)
@@ -1183,7 +1216,9 @@ void parse_commandline(
   uint64_t* freq_hz, 
   uint32_t* access_mask, 
   int* hop_flag,
-  char** filename_pcap
+  char** filename_pcap,
+  char** filename_iq,
+  char** read_filename
 ) {
   printf("BLE sniffer. Xianjun Jiao. putaoshu@msn.com\n\n");
   
@@ -1212,6 +1247,10 @@ void parse_commandline(
   
   (*filename_pcap) = 0;
 
+  (*filename_iq) = 0;
+
+  (*read_filename) = 0;
+
   while (1) {
     static struct option long_options[] = {
       {"help",         no_argument,       0, 'h'},
@@ -1226,12 +1265,14 @@ void parse_commandline(
       {"freq_hz",           required_argument, 0, 'f'},
       {"access_mask",         required_argument, 0, 'm'},
       {"hop",         no_argument, 0, 'o'},
-      {"filename",         required_argument, 0, 's'},
+      {"filename_pcap",         required_argument, 0, 's'},
+      {"filename_iq",         required_argument, 0, 'w'},
+      {"read_filename",		required_argument, 0, 'd'},
       {0, 0, 0, 0}
     };
     /* getopt_long stores the option index here. */
     int option_index = 0;
-    int c = getopt_long (argc, argv, "hc:g:l:ba:k:vrf:m:os:",
+    int c = getopt_long (argc, argv, "hc:g:l:ba:k:vrf:m:os:w:d:",
                      long_options, &option_index);
 
     /* Detect the end of the options. */
@@ -1297,6 +1338,14 @@ void parse_commandline(
 
       case 's':
         (*filename_pcap) = (char*)optarg;
+        break;
+
+      case 'w':
+        (*filename_iq) = (char*)optarg;
+        break;
+
+      case 'd':
+        (*read_filename) = (char*)optarg;
         break;
         
       case '?':
@@ -2070,7 +2119,7 @@ void receiver(IQ_TYPE *rxp_in, int buf_len, int channel_number, uint32_t access_
     //pkt_count++;
     //printf("hit %d\n", hit_idx);
     
-    //printf("%d %d %d %d %d %d %d %d\n", rxp[hit_idx+0], rxp[hit_idx+1], rxp[hit_idx+2], rxp[hit_idx+3], rxp[hit_idx+4], rxp[hit_idx+5], rxp[hit_idx+6], rxp[hit_idx+7]);
+    //printf("%d, %d, %d, %d, %d, %d, %d, %d\n", rxp[hit_idx+0], rxp[hit_idx+1], rxp[hit_idx+2], rxp[hit_idx+3], rxp[hit_idx+4], rxp[hit_idx+5], rxp[hit_idx+6], rxp[hit_idx+7]);
 
     buf_len_eaten = buf_len_eaten + hit_idx;
     //printf("%d\n", buf_len_eaten);
@@ -2085,7 +2134,8 @@ void receiver(IQ_TYPE *rxp_in, int buf_len, int channel_number, uint32_t access_
       
     buf_len_eaten = buf_len_eaten + 8*num_demod_byte*2*SAMPLE_PER_SYMBOL;
     //if ( buf_len_eaten > buf_len ) {
-    if ( buf_len_eaten > demod_buf_len ) {
+    if (read_filename == NULL && buf_len_eaten > demod_buf_len ) {
+      printf("buf_len_eaten:%d, demod_buf_len:%d\n", buf_len_eaten, demod_buf_len);
       break;
     }
 
@@ -2094,7 +2144,7 @@ void receiver(IQ_TYPE *rxp_in, int buf_len, int channel_number, uint32_t access_
     if(!raw_flag) scramble_byte(tmp_byte, num_demod_byte, scramble_table[channel_number], tmp_byte);
     rxp = rxp_in + buf_len_eaten;
     num_symbol_left = (buf_len-buf_len_eaten)/(SAMPLE_PER_SYMBOL*2);
-    
+
     if (raw_flag) { //raw recv stop here
       pkt_count++;
     
@@ -2111,7 +2161,7 @@ void receiver(IQ_TYPE *rxp_in, int buf_len, int channel_number, uint32_t access_
       
       continue;
     }
-    
+
     if (adv_flag)
     {
       parse_adv_pdu_header_byte(tmp_byte, &adv_pdu_type, &adv_tx_add, &adv_rx_add, &payload_len);
@@ -2132,7 +2182,7 @@ void receiver(IQ_TYPE *rxp_in, int buf_len, int channel_number, uint32_t access_
     num_demod_byte = (payload_len+3);
     buf_len_eaten = buf_len_eaten + 8*num_demod_byte*2*SAMPLE_PER_SYMBOL;
     //if ( buf_len_eaten > buf_len ) {
-    if ( buf_len_eaten > demod_buf_len ) {
+    if (read_filename == NULL &&  buf_len_eaten > demod_buf_len ) {
       //printf("\n");
       break;
     }
@@ -2301,7 +2351,7 @@ int receiver_controller(void *rf_dev, int verbose_flag, int *chan, uint32_t *acc
 }
 
 //---------------------------for offline test--------------------------------------
-//IQ_TYPE tmp_buf[2097152];
+IQ_TYPE tmp_buf[314572800];
 //---------------------------for offline test--------------------------------------
 
 int main(int argc, char** argv) {
@@ -2313,23 +2363,28 @@ int main(int argc, char** argv) {
   void* rf_dev;
   IQ_TYPE *rxp;
 
-  parse_commandline(argc, argv, &chan, &gain, &lnaGain, &amp, &access_addr, &crc_init, &verbose_flag, &raw_flag, &freq_hz, &access_addr_mask, &hop_flag, &filename_pcap);
+  parse_commandline(argc, argv, &chan, &gain, &lnaGain, &amp, &access_addr, &crc_init, &verbose_flag, &raw_flag, &freq_hz, &access_addr_mask, &hop_flag, &filename_pcap, &filename_iq, &read_filename);
 
   if (freq_hz == 123)
     freq_hz = get_freq_by_channel_number(chan);
   
   uint32_to_bit_array(access_addr_mask, access_bit_mask);
   
-  printf("Cmd line input: chan %d, freq %ldMHz, access addr %08x, crc init %06x raw %d verbose %d rx %ddB (%s) file=%s\n", chan, freq_hz/1000000, access_addr, crc_init, raw_flag, verbose_flag, gain, board_name, filename_pcap);
+  printf("Cmd line input: chan %d, freq %ldMHz, access addr %08x, crc init %06x raw %d verbose %d rx %ddB (%s) pcap_file=%s iq_file=%s\n", chan, freq_hz/1000000, access_addr, crc_init, raw_flag, verbose_flag, gain, board_name, filename_pcap, filename_iq);
 
   if(filename_pcap != NULL) {
     printf("will store packets to: %s\n", filename_pcap);
     init_pcap_file();
   }
+
+  if(filename_iq != NULL) {
+    printf("will store iq samples to: %s\n", filename_iq);
+    init_iq_file();
+  }
   
   // run cyclic recv in background
   do_exit = false;
-  if ( config_run_board(freq_hz, gain, lnaGain, amp, &rf_dev) != 0 ){
+  if (read_filename == NULL && config_run_board(freq_hz, gain, lnaGain, amp, &rf_dev) != 0 ){
     if (rf_dev != NULL) {
       goto program_quit;
     }
@@ -2353,6 +2408,14 @@ int main(int argc, char** argv) {
   receiver_status.crc_ok = false;
   
   crc_init_internal = crc_init_reorder(crc_init);
+
+  if (read_filename != NULL) {
+    printf("read iq sample from %s\n", read_filename);
+    load_iq_sample(tmp_buf, 314572800, read_filename);
+    printf("load file done\n");
+    receiver(tmp_buf, 314572800, chan, 0x8E89BED6, 0x555555, 1, 0);
+    goto program_quit;
+  }
   
   // scan
   do_exit = false;
@@ -2386,7 +2449,7 @@ int main(int argc, char** argv) {
       rxp = (IQ_TYPE*)rx_buf;
       run_flag = true;
     }
-    
+
     if (run_flag) {
       #if 0
       // ------------------------for offline test -------------------------------------
@@ -2414,8 +2477,9 @@ int main(int argc, char** argv) {
 
 program_quit:
   printf("Exit main loop ...\n");
-  stop_close_board(rf_dev);
+  if(!rf_dev) stop_close_board(rf_dev);
 
   if(fh_pcap_store) fclose(fh_pcap_store);
+  if(fh_iq_store) fclose(fh_iq_store);
   return(0);
 }

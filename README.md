@@ -28,6 +28,7 @@ Build and Quick test
 Make sure your SDR hardware environment (driver/lib) has been setup correctly before run this project.
 
 ```
+sudo apt-get install -y libhackrf-dev
 git clone https://github.com/JiaoXianjun/BTLE.git
 cd BTLE/host
 mkdir build
